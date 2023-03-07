@@ -1,0 +1,89 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/*.yml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/*.yml"
+jobs:
+  build:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v3
+
+      - name: Show workflow information 
+        id: get_filename
+        run: |
+          export _NAME=$(jq ".[\"$GOOS-$GOARCH$GOARM$GOMIPS\"].friendlyName" -r < .github/build/friendly-filenames.json)
+          echo "GOOS: $GOOS, GOARCH: $GOARCH, GOARM: $GOARM, GOMIPS: $GOMIPS, RELEASE_NAME: $_NAME"
+          echo "::set-output name=ASSET_NAME::$_NAME"
+          echo "ASSET_NAME=$_NAME" >> $GITHUB_ENV
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.17.7
+          check-latest: true
+
+      - name: Get project dependencies
+        run: go mod download
+        
+      - name: Build X-UI
+        run: |
+          echo "current build path is $(pwd)"
+          go build -o x-ui main.go
+      - name: Prepare to release
+        run: |
+          echo "current path is $(pwd)"
+          rm -rf  $(pwd)/output/* && mkdir -p $(pwd)/output/x-ui/bin
+          cp x-ui ./output/x-ui
+          cp ${GITHUB_WORKSPACE}/README.md ./output/x-ui/README.md
+          cp ${GITHUB_WORKSPACE}/LICENSE ./output/x-ui/LICENSE
+          echo "prepare xray core"
+          cd ./output/ && echo "current path is $(pwd)"
+          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip Xray-linux-64.zip
+          rm -rf README.md LICENSE Xray-linux-64.zip
+          mv xray ./x-ui/bin/xray-linux-amd64
+          echo "prepare geoip and site"
+          curl -s -L -o ./geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+          curl -s -L -o ./geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+          mv geoip.dat ./x-ui/bin/
+          mv geosite.dat ./x-ui/bin/
+          echo "chmod x permission"
+          cp ../x-ui.service ./x-ui
+          cp ../x-ui.sh ./x-ui
+          chmod +x ./x-ui/x-ui
+          chmod +x ./x-ui/x-ui.sh
+          echo "tar files"
+          tar -czvf x-ui-linux-amd64.tar.gz ./x-ui
+          ls -lah
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        if: github.event_name == 'release'
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${GITHUB_WORKSPACE}/output/x-ui-linux-amd64.tar.gz
+          tag: ${{ github.ref }}
+          file_glob: false
