@@ -1,89 +1,105 @@
-name: Build and Release
-
+name: Release X-ui
 on:
-  workflow_dispatch:
-  release:
-    types: [published]
   push:
-    branches:
-      - main
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/*.yml"
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/*.yml"
-jobs:
-  build:
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    env:
-      GOOS: ${{ matrix.goos }}
-      GOARCH: ${{ matrix.goarch }}
-      GOARM: ${{ matrix.goarm }}
-      CGO_ENABLED: 0
-    steps:
-      - name: Checkout codebase
-        uses: actions/checkout@v3
+    tags:
+      - 0.*
+  workflow_dispatch:
 
-      - name: Show workflow information 
-        id: get_filename
-        run: |
-          export _NAME=$(jq ".[\"$GOOS-$GOARCH$GOARM$GOMIPS\"].friendlyName" -r < .github/build/friendly-filenames.json)
-          echo "GOOS: $GOOS, GOARCH: $GOARCH, GOARM: $GOARM, GOMIPS: $GOMIPS, RELEASE_NAME: $_NAME"
-          echo "::set-output name=ASSET_NAME::$_NAME"
-          echo "ASSET_NAME=$_NAME" >> $GITHUB_ENV
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          draft: true
+          prerelease: false
+  linuxamd64build:
+    name: build x-ui amd64 version
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: ^1.17.7
-          check-latest: true
-
-      - name: Get project dependencies
-        run: go mod download
-        
-      - name: Build X-UI
+          go-version: 1.18
+      - name: build linux amd64 version
         run: |
-          echo "current build path is $(pwd)"
-          go build -o x-ui main.go
-      - name: Prepare to release
-        run: |
-          echo "current path is $(pwd)"
-          rm -rf  $(pwd)/output/* && mkdir -p $(pwd)/output/x-ui/bin
-          cp x-ui ./output/x-ui
-          cp ${GITHUB_WORKSPACE}/README.md ./output/x-ui/README.md
-          cp ${GITHUB_WORKSPACE}/LICENSE ./output/x-ui/LICENSE
-          echo "prepare xray core"
-          cd ./output/ && echo "current path is $(pwd)"
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o xui-release -v main.go
+          mkdir x-ui
+          cp xui-release x-ui/xui-release
+          cp x-ui.service x-ui/x-ui.service
+          cp x-ui.sh x-ui/x-ui.sh
+          cd x-ui
+          mv xui-release x-ui
+          mkdir bin
+          cd bin
           wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
           unzip Xray-linux-64.zip
-          rm -rf README.md LICENSE Xray-linux-64.zip
-          mv xray ./x-ui/bin/xray-linux-amd64
-          echo "prepare geoip and site"
-          curl -s -L -o ./geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-          curl -s -L -o ./geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-          mv geoip.dat ./x-ui/bin/
-          mv geosite.dat ./x-ui/bin/
-          echo "chmod x permission"
-          cp ../x-ui.service ./x-ui
-          cp ../x-ui.sh ./x-ui
-          chmod +x ./x-ui/x-ui
-          chmod +x ./x-ui/x-ui.sh
-          echo "tar files"
-          tar -czvf x-ui-linux-amd64.tar.gz ./x-ui
-          ls -lah
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
-        if: github.event_name == 'release'
+          rm -f Xray-linux-64.zip
+          mv xray xray-linux-amd64
+          rm -f geoip.dat geosite.dat
+          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+          cd ..
+          cd ..
+      - name: package
+        run: tar -zcvf x-ui-linux-amd64.tar.gz x-ui
+      - name: upload
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ${GITHUB_WORKSPACE}/output/x-ui-linux-amd64.tar.gz
-          tag: ${{ github.ref }}
-          file_glob: false
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: x-ui-linux-amd64.tar.gz
+          asset_name: x-ui-linux-amd64.tar.gz
+          asset_content_type: application/gzip
+  linuxarm64build:
+    name: build x-ui arm64 version
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
+      - name: build linux arm64 version
+        run: |
+          GOOS=linux GOARCH=arm64 go build -o xui-release -v main.go
+          mkdir x-ui
+          cp xui-release x-ui/xui-release
+          cp x-ui.service x-ui/x-ui.service
+          cp x-ui.sh x-ui/x-ui.sh
+          cd x-ui
+          mv xui-release x-ui
+          mkdir bin
+          cd bin
+          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip
+          unzip Xray-linux-arm64-v8a.zip
+          rm -f Xray-linux-arm64-v8a.zip
+          mv xray xray-linux-arm64
+          rm -f geoip.dat geosite.dat
+          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+          cd ..
+          cd ..
+      - name: package
+        run: tar -zcvf x-ui-linux-arm64.tar.gz x-ui
+      - name: upload
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: x-ui-linux-arm64.tar.gz
+          asset_name: x-ui-linux-arm64.tar.gz
+          asset_content_type: application/gzip
